@@ -1,0 +1,1 @@
+# EA Trading Backend Application

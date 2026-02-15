@@ -1,0 +1,128 @@
+name: ea-trading
+
+services:
+  # PostgreSQL 資料庫
+  postgres:
+    image: postgres:15-alpine
+    container_name: ea_trading_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ea_trading
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ea_trading"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: always
+    networks:
+      - ea_trading_network
+
+  # Redis 快取
+  redis:
+    image: redis:7-alpine
+    container_name: ea_trading_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: always
+    networks:
+      - ea_trading_network
+
+  # 後端應用程式
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ea_trading_backend
+    environment:
+      # 資料庫配置
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ea_trading
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ea_trading
+      
+      # Redis 配置
+      REDIS_URL: redis://redis:6379/0
+      
+      # 加密金鑰（請在生產環境中使用安全的金鑰）
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-your-base64-encoded-fernet-key-here}
+      
+      # JWT 配置
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_MINUTES: 1440
+      
+      # 應用程式配置
+      APP_ENV: development
+      DEBUG: "True"
+      LOG_LEVEL: INFO
+      API_V1_PREFIX: /api/v1
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./alembic:/app/alembic
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: always
+    networks:
+      - ea_trading_network
+
+  # 前端應用程式（開發模式 - 支援熱更新）
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: ea_trading_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: always
+    networks:
+      - ea_trading_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  ea_trading_network:
+    driver: bridge
